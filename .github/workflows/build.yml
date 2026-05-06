@@ -1,0 +1,72 @@
+name: Build Dynalite APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        run: |
+          sdkmanager "build-tools;34.0.0" "platforms;android-34" --sdk_root=$ANDROID_SDK_ROOT
+
+      - name: Create gradlew
+        run: |
+          cat > gradlew << 'GRADLEW'
+          #!/bin/sh
+          exec java -jar "$(dirname "$0")/gradle/wrapper/gradle-wrapper.jar" "$@"
+          GRADLEW
+          chmod +x gradlew
+
+      - name: Download Gradle wrapper jar
+        run: |
+          mkdir -p gradle/wrapper
+          curl -L -o gradle/wrapper/gradle-wrapper.jar \
+            "https://github.com/gradle/gradle/raw/v8.2.1/gradle/wrapper/gradle-wrapper.jar" \
+            || \
+          curl -L -o gradle/wrapper/gradle-wrapper.jar \
+            "https://raw.githubusercontent.com/gradle/gradle/refs/tags/v8.2.1/gradle/wrapper/gradle-wrapper.jar"
+          ls -la gradle/wrapper/
+
+      - name: Build APK
+        run: |
+          export GRADLE_OPTS="-Dorg.gradle.daemon=false"
+          ./gradlew assembleDebug --stacktrace 2>&1
+        env:
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+      - name: Find APK
+        run: |
+          echo "Buscando APK..."
+          find . -name "*.apk" -type f
+          APK=$(find . -name "app-debug.apk" -type f | head -1)
+          if [ -n "$APK" ]; then
+            echo "✅ APK encontrada: $APK ($(du -sh $APK | cut -f1))"
+            cp "$APK" ./dynalite-control.apk
+          else
+            echo "❌ APK no encontrada"
+            exit 1
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynalite-control-apk
+          path: dynalite-control.apk
+          retention-days: 30
