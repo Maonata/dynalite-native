@@ -22,5 +22,10 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".DiagActivity"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"/>
+
     </application>
 </manifest>
