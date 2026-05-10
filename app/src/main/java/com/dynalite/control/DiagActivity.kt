@@ -26,7 +26,7 @@ class DiagActivity : AppCompatActivity() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val uiScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val timeFmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
-    private val logLines = mutableListOf<Pair<String, Int>>() // text, color
+    private val logLines = mutableListOf<String>()
 
     private lateinit var tvLog: TextView
     private lateinit var btnConnect: Button
