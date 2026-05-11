@@ -293,32 +293,33 @@ class DiagActivity : AppCompatActivity() {
     }
 
     private fun sendManual(hexStr: String) {
-        try {
-            val parts = hexStr.trim().split("\\s+".toRegex()).filter { it.isNotEmpty() }
-            if (parts.size < 7) {
-                addLog("ERR", "Need 7 bytes (checksum auto-calculated)")
-                return
-            }
-            val pkt7 = ByteArray(8)
-            for (i in 0 until 7) {
-                pkt7[i] = parts[i].toInt(16).toByte()
-            }
-            // Usa el mismo checksum que el cliente
-            val full = client.buildPacket(
-                area = pkt7[1].toInt().and(0xFF),
-                data1 = pkt7[2].toInt().and(0xFF),
-                opcode = pkt7[3].toInt().and(0xFF),
-                d2 = pkt7[4].toInt().and(0xFF),
-                d3 = pkt7[5].toInt().and(0xFF),
-                join = pkt7[6].toInt().and(0xFF)
-            )
-            addLog("MAN", "Sending: ${full.toHex()}")
-            client.sendRaw(full)
-        } catch (e: Exception) {
-            addLog("ERR", "Invalid hex format: ${e.message}")
+    try {
+        val parts = hexStr.trim().split("\\s+".toRegex()).filter { it.isNotEmpty() }
+        if (parts.size < 7) {
+            addLog("ERR", "Need 7 bytes (checksum auto-calculated)")
+            return
         }
-    }
+        val pkt7 = ByteArray(8)
+        for (i in 0 until 7) {
+            pkt7[i] = parts[i].toInt(16).toByte()
+        }
 
+        // Usamos buildPacket para asegurar mismo checksum que DynaliteClient
+        val full = client.buildPacket(
+            area = pkt7[1].toInt().and(0xFF),
+            data1 = pkt7[2].toInt().and(0xFF),
+            opcode = pkt7[3].toInt().and(0xFF),
+            d2 = pkt7[4].toInt().and(0xFF),
+            d3 = pkt7[5].toInt().and(0xFF),
+            join = pkt7[6].toInt().and(0xFF)
+        )
+
+        addLog("MAN", "Sending: ${full.toHex()}")
+        client.sendRaw(full)
+    } catch (e: Exception) {
+        addLog("ERR", "Invalid hex format: ${e.message}")
+    }
+}
     private fun toggleConnect() {
         if (client.isConnected()) {
             client.disconnect()
