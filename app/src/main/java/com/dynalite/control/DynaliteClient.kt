@@ -268,13 +268,15 @@ class DynaliteClient {
     }
 
     private fun checksum(pkt: ByteArray): Byte {
-        var xor = 0
-        // XOR bytes[1..6] (AREA..JOIN)
-        for (i in 1..6) {
-            xor = xor xor pkt[i].toInt().and(0xFF)
-        }
-        return ((xor or 0x80) and 0xFF).toByte()
+    // Suma bytes 0..6 (inclusive)
+    var sum = 0
+    for (i in 0..6) {
+        sum = (sum + pkt[i].toInt().and(0xFF)) and 0xFF
     }
+    // Negativo en complemento a 2 (8 bits)
+    val cs = (-sum) and 0xFF
+    return cs.toByte()
+}
 
     private fun verifyChecksum(pkt: ByteArray): Boolean =
         pkt.size == 8 && pkt[7] == checksum(pkt)
