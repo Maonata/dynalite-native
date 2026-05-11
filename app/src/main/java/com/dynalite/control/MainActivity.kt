@@ -15,30 +15,34 @@ import java.util.*
 
 class MainActivity : AppCompatActivity() {
 
+    // ------------------------------------------------------------------
+    // ZONES — edit area and channel to match your Dynalite programming
+    // ------------------------------------------------------------------
     data class Zone(
         val id: Int, val name: String, val area: Int, val channel: Int,
         var level: Int = 0, var isOn: Boolean = false
     )
 
     private val zones = mutableListOf(
-        Zone(1, "Sala principal", area=1, channel=1),
-        Zone(2, "Comedor",        area=1, channel=2),
-        Zone(3, "Cocina",         area=1, channel=3),
-        Zone(4, "Dormitorio 1",   area=2, channel=1),
-        Zone(5, "Dormitorio 2",   area=2, channel=2),
-        Zone(6, "Baño principal", area=2, channel=3),
-        Zone(7, "Pasillo",        area=1, channel=4),
-        Zone(8, "Terraza",        area=3, channel=1),
+        Zone(1, "Main Hall",    area = 1, channel = 1),
+        Zone(2, "Dining Room",  area = 1, channel = 2),
+        Zone(3, "Kitchen",      area = 1, channel = 3),
+        Zone(4, "Bedroom 1",    area = 2, channel = 1),
+        Zone(5, "Bedroom 2",    area = 2, channel = 2),
+        Zone(6, "Main Bathroom",area = 2, channel = 3),
+        Zone(7, "Hallway",      area = 1, channel = 4),
+        Zone(8, "Terrace",      area = 3, channel = 1)
     )
 
     private val scenes = mapOf(
         "Normal"  to listOf(80, 60, 100, 60, 60, 70, 40, 50),
-        "Reunión" to listOf(100, 80, 60, 30, 30, 60, 80, 70),
-        "Cena"    to listOf(20, 40, 10, 10, 10, 20, 15, 60),
+        "Meeting" to listOf(100, 80, 60, 30, 30, 60, 80, 70),
+        "Dinner"  to listOf(20, 40, 10, 10, 10, 20, 15, 60),
         "Relax"   to listOf(15, 15, 0, 30, 30, 20, 10, 20),
-        "Noche"   to listOf(0, 0, 0, 10, 10, 10, 10, 0),
+        "Night"   to listOf(0, 0, 0, 10, 10, 10, 10, 0)
     )
 
+    // Colors
     private val C_BG      = Color.parseColor("#0d0d14")
     private val C_CARD    = Color.parseColor("#141420")
     private val C_CARD_ON = Color.parseColor("#1c1b28")
@@ -48,28 +52,33 @@ class MainActivity : AppCompatActivity() {
     private val C_BLUE    = Color.parseColor("#64b5f6")
     private val C_TEXT    = Color.parseColor("#f0eee8")
     private val C_MUTED   = Color.parseColor("#666677")
-    private val C_LOG_BG  = Color.parseColor("#0a0a10")
+    private val C_LOG_BG  = Color.parseColor("#080810")
 
-    private val client  = DynaliteClient()
-    private val uiScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+    private val client   = DynaliteClient()
+    private val uiScope  = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val timeFmt  = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     private val logLines = mutableListOf<String>()
 
-    private val prefs     get() = getSharedPreferences("dyn", MODE_PRIVATE)
-    private var savedIp   get() = prefs.getString("ip", "172.18.0.101")!!
+    private val prefs     get() = getSharedPreferences("dynalite", MODE_PRIVATE)
+    private var savedIp   get() = prefs.getString("ip", "172.18.0.101") ?: "172.18.0.101"
         set(v) { prefs.edit().putString("ip", v).apply() }
     private var savedPort get() = prefs.getInt("port", 50000)
         set(v) { prefs.edit().putInt("port", v).apply() }
 
-    private lateinit var btnConnect: Button
-    private lateinit var tvLog: TextView
+    private lateinit var btnConnect : Button
+    private lateinit var tvLog      : TextView
+    private lateinit var zonesLL    : LinearLayout
 
     data class ZoneUI(
-        val card: LinearLayout, val tvSub: TextView,
-        val seek: SeekBar, val btnToggle: Button, val tvPct: TextView
+        val card     : LinearLayout,
+        val tvSub    : TextView,
+        val seek     : SeekBar,
+        val btnToggle: Button,
+        val tvPct    : TextView
     )
     private val zoneUIs = mutableMapOf<Int, ZoneUI>()
 
+    // ------------------------------------------------------------------
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(buildUI())
@@ -77,150 +86,153 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        client.destroy(); uiScope.cancel(); super.onDestroy()
+        client.destroy()
+        uiScope.cancel()
+        super.onDestroy()
     }
 
-    private fun buildUI(): LinearLayout {
-        val root = ll(true, C_BG, 0)
+    // ------------------------------------------------------------------
+    // BUILD UI — works in both landscape and portrait
+    // ------------------------------------------------------------------
+    private fun buildUI(): ScrollView {
+        val scroll = ScrollView(this).apply { setBackgroundColor(C_BG) }
+        val root   = vll(C_BG)
 
         // Header
-        val header = ll(false).apply { setPadding(dp(14), dp(12), dp(14), dp(8)) }
-        val tvTitle = tv("Control Dynalite", 17f, C_TEXT, bold = true).apply {
-            layoutParams = lp(0, wrap).apply { weight = 1f }
+        val header = hll().apply { setPadding(dp(14), dp(12), dp(14), dp(8)) }
+        val tvTitle = tv("Dynalite Control", 18f, C_TEXT, bold = true).apply {
+            layoutParams = LP(0, WRAP).apply { weight = 1f }
         }
         btnConnect = Button(this).apply {
-            text = "Conectar"; textSize = 12f
+            text = "Connect"; textSize = 12f
             setTextColor(C_TEXT)
             setBackgroundColor(Color.parseColor("#222233"))
             setPadding(dp(14), dp(6), dp(14), dp(6))
             setOnClickListener { showConnectDialog() }
         }
         val btnDiag = Button(this).apply {
-            text = "🔧"; textSize = 12f
+            text = "⚙"; textSize = 14f
             setTextColor(C_BLUE)
             setBackgroundColor(Color.parseColor("#080818"))
             setPadding(dp(10), dp(6), dp(10), dp(6))
-            layoutParams = lp(dp(50), dp(40)).apply { leftMargin = dp(6) }
+            layoutParams = LP(dp(44), dp(44)).apply { leftMargin = dp(6) }
             setOnClickListener { startActivity(Intent(this@MainActivity, DiagActivity::class.java)) }
         }
         header.addView(tvTitle)
         header.addView(btnConnect)
         header.addView(btnDiag)
-        root.addView(header, lp(match, wrap))
+        root.addView(header, LP(MATCH, WRAP))
         root.addView(divider())
 
-        // Escenas
+        // Scenes
         val scenesScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             setPadding(dp(14), dp(8), dp(14), dp(4))
         }
-        val scenesLL = ll(false)
+        val scenesRow = hll()
         scenes.keys.forEach { name ->
-            scenesLL.addView(Button(this).apply {
+            scenesRow.addView(Button(this).apply {
                 text = name; textSize = 12f; setTextColor(C_MUTED)
                 setBackgroundColor(Color.parseColor("#1a1a28"))
                 setPadding(dp(14), dp(4), dp(14), dp(4))
-                layoutParams = lp(wrap, dp(38)).apply { rightMargin = dp(8) }
+                layoutParams = LP(WRAP, dp(38)).apply { rightMargin = dp(8) }
                 setOnClickListener { applyScene(name) }
             })
         }
-        scenesScroll.addView(scenesLL)
-        root.addView(scenesScroll, lp(match, wrap))
+        scenesScroll.addView(scenesRow)
+        root.addView(scenesScroll, LP(MATCH, WRAP))
 
-        // Globales
-        val globalRow = ll(false).apply { setPadding(dp(14), dp(4), dp(14), dp(8)) }
+        // Global controls
+        val globalRow = hll().apply { setPadding(dp(14), dp(4), dp(14), dp(8)) }
         globalRow.addView(Button(this).apply {
-            text = "⚡ Todo ON"; textSize = 12f; setTextColor(C_ACCENT)
+            text = "All ON"; textSize = 12f; setTextColor(C_ACCENT)
             setBackgroundColor(Color.parseColor("#1a1800"))
-            layoutParams = lp(0, dp(40)).apply { weight = 1f; rightMargin = dp(6) }
+            layoutParams = LP(0, dp(40)).apply { weight = 1f; rightMargin = dp(6) }
             setOnClickListener { allOn() }
         })
         globalRow.addView(Button(this).apply {
-            text = "✕ Todo OFF"; textSize = 12f; setTextColor(C_RED)
+            text = "All OFF"; textSize = 12f; setTextColor(C_RED)
             setBackgroundColor(Color.parseColor("#1a0808"))
-            layoutParams = lp(0, dp(40)).apply { weight = 1f; rightMargin = dp(6) }
+            layoutParams = LP(0, dp(40)).apply { weight = 1f; rightMargin = dp(6) }
             setOnClickListener { allOff() }
         })
         globalRow.addView(Button(this).apply {
             text = "↺ Sync"; textSize = 12f; setTextColor(C_BLUE)
             setBackgroundColor(Color.parseColor("#08101a"))
-            layoutParams = lp(0, dp(40)).apply { weight = 1f }
+            layoutParams = LP(0, dp(40)).apply { weight = 1f }
             setOnClickListener { syncLevels() }
         })
-        root.addView(globalRow, lp(match, wrap))
+        root.addView(globalRow, LP(MATCH, WRAP))
         root.addView(divider())
 
-        // Zonas
-        val zonesScroll = ScrollView(this).apply {
-            layoutParams = lp(match, 0).apply { weight = 1f }
-        }
-        val zonesLL = ll(true).apply { setPadding(dp(14), dp(8), dp(14), dp(8)) }
+        // Zone cards
+        zonesLL = vll().apply { setPadding(dp(14), dp(8), dp(14), dp(8)) }
         zones.forEach { zone ->
             val zui = buildZoneCard(zone)
             zoneUIs[zone.id] = zui
-            zonesLL.addView(zui.card, lp(match, wrap).apply { bottomMargin = dp(8) })
+            zonesLL.addView(zui.card, LP(MATCH, WRAP).apply { bottomMargin = dp(8) })
         }
-        zonesScroll.addView(zonesLL)
-        root.addView(zonesScroll)
-
-        // Log
+        root.addView(zonesLL, LP(MATCH, WRAP))
         root.addView(divider())
-        val logHeader = ll(false).apply {
-            setPadding(dp(14), dp(6), dp(14), dp(4))
-            setBackgroundColor(C_LOG_BG)
-        }
-        logHeader.addView(tv("ACTIVIDAD", 10f, C_MUTED).apply {
-            layoutParams = lp(0, wrap).apply { weight = 1f }
+
+        // Activity log
+        val logHeader = hll(C_LOG_BG).apply { setPadding(dp(14), dp(6), dp(14), dp(4)) }
+        logHeader.addView(tv("ACTIVITY LOG", 10f, C_MUTED).apply {
+            layoutParams = LP(0, WRAP).apply { weight = 1f }
         })
-        logHeader.addView(tv("● EN VIVO", 10f, C_GREEN))
-        root.addView(logHeader, lp(match, wrap))
+        logHeader.addView(tv("● LIVE", 10f, C_GREEN))
+        root.addView(logHeader, LP(MATCH, WRAP))
 
         tvLog = TextView(this).apply {
-            text = "Toca 🔧 para diagnóstico TCP detallado"
+            text = "Tap Connect to link the PDEG gateway"
             textSize = 11f; setTextColor(C_MUTED)
             typeface = Typeface.MONOSPACE
             setBackgroundColor(C_LOG_BG)
-            setPadding(dp(14), dp(4), dp(14), dp(10))
-            minLines = 3; maxLines = 3
+            setPadding(dp(14), dp(6), dp(14), dp(10))
+            minLines = 4; maxLines = 4
         }
-        root.addView(tvLog, lp(match, wrap))
-        return root
+        root.addView(tvLog, LP(MATCH, WRAP))
+
+        scroll.addView(root)
+        return scroll
     }
 
     private fun buildZoneCard(zone: Zone): ZoneUI {
-        val card = ll(true, C_CARD, 0).apply { setPadding(dp(12), dp(10), dp(12), dp(10)) }
+        val card = vll(C_CARD).apply { setPadding(dp(12), dp(10), dp(12), dp(10)) }
 
-        val topRow = ll(false).apply { gravity = Gravity.CENTER_VERTICAL }
-        val nameCol = ll(true).apply { layoutParams = lp(0, wrap).apply { weight = 1f } }
+        val topRow = hll().apply { gravity = Gravity.CENTER_VERTICAL }
+        val nameCol = vll().apply { layoutParams = LP(0, WRAP).apply { weight = 1f } }
         nameCol.addView(tv(zone.name, 14f, C_TEXT, bold = true))
-        val tvSub = tv("Apagado · A${zone.area} Ch${zone.channel}", 11f, C_MUTED)
+        val tvSub = tv("Off · A${zone.area} Ch${zone.channel}", 11f, C_MUTED)
         nameCol.addView(tvSub)
 
         val tvPct = tv("--", 14f, C_MUTED).apply {
-            typeface = Typeface.MONOSPACE; width = dp(46); gravity = Gravity.END
+            typeface = Typeface.MONOSPACE
+            minWidth = dp(46); gravity = Gravity.END
             setPadding(0, 0, dp(10), 0)
         }
         val btnToggle = Button(this).apply {
             text = "OFF"; textSize = 12f; setTextColor(C_MUTED)
             setBackgroundColor(Color.parseColor("#2a2a38"))
-            setPadding(dp(16), dp(4), dp(16), dp(4))
-            layoutParams = lp(dp(70), dp(36))
+            setPadding(dp(14), dp(4), dp(14), dp(4))
+            layoutParams = LP(dp(72), dp(36))
         }
         topRow.addView(nameCol); topRow.addView(tvPct); topRow.addView(btnToggle)
-        card.addView(topRow, lp(match, wrap).apply { bottomMargin = dp(8) })
+        card.addView(topRow, LP(MATCH, WRAP).apply { bottomMargin = dp(8) })
 
-        val seekRow = ll(false).apply { gravity = Gravity.CENTER_VERTICAL }
+        val seekRow = hll().apply { gravity = Gravity.CENTER_VERTICAL }
         seekRow.addView(tv("○", 11f, C_MUTED).apply { setPadding(0, 0, dp(6), 0) })
         val seek = SeekBar(this).apply {
             max = 100; progress = 0; isEnabled = false; alpha = 0.3f
-            layoutParams = lp(0, wrap).apply { weight = 1f }
+            layoutParams = LP(0, WRAP).apply { weight = 1f }
         }
         seekRow.addView(seek)
         seekRow.addView(tv("●", 11f, C_ACCENT).apply { setPadding(dp(6), 0, 0, 0) })
-        card.addView(seekRow, lp(match, wrap))
+        card.addView(seekRow, LP(MATCH, WRAP))
 
         val zui = ZoneUI(card, tvSub, seek, btnToggle, tvPct)
 
+        // Toggle ON/OFF
         btnToggle.setOnClickListener {
             zone.isOn = !zone.isOn
             if (zone.isOn && zone.level == 0) zone.level = 80
@@ -230,10 +242,12 @@ class MainActivity : AppCompatActivity() {
             addLog("APP", "${zone.name} → ${if (zone.isOn) "ON ${zone.level}%" else "OFF"}")
         }
 
+        // Dimmer slider
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
                 if (!fromUser) return
-                zone.level = p; zone.isOn = p > 0
+                zone.level = p
+                zone.isOn  = p > 0
                 refreshZone(zone, zui)
                 client.setLevel(zone.area, zone.channel, p, 300)
             }
@@ -244,29 +258,39 @@ class MainActivity : AppCompatActivity() {
         return zui
     }
 
+    // ------------------------------------------------------------------
+    // REFRESH ZONE UI
+    // ------------------------------------------------------------------
     private fun refreshZone(zone: Zone, zui: ZoneUI, remote: Boolean = false) {
         val on = zone.isOn
         zui.card.setBackgroundColor(if (on) C_CARD_ON else C_CARD)
         zui.btnToggle.text = if (on) "ON" else "OFF"
         zui.btnToggle.setTextColor(if (on) C_ACCENT else C_MUTED)
-        zui.btnToggle.setBackgroundColor(if (on) Color.parseColor("#2a2000") else Color.parseColor("#2a2a38"))
-        zui.seek.isEnabled = on; zui.seek.alpha = if (on) 1f else 0.3f
+        zui.btnToggle.setBackgroundColor(
+            if (on) Color.parseColor("#2a2000") else Color.parseColor("#2a2a38")
+        )
+        zui.seek.isEnabled = on
+        zui.seek.alpha     = if (on) 1f else 0.3f
         zui.seek.progress  = zone.level
         zui.tvPct.text     = if (on) "${zone.level}%" else "--"
         zui.tvPct.setTextColor(if (on) C_ACCENT else C_MUTED)
-        val tag = if (remote) " ↩" else ""
-        zui.tvSub.text = if (on) "${zone.level}% · A${zone.area} Ch${zone.channel}$tag"
-                         else    "Apagado · A${zone.area} Ch${zone.channel}"
+        val remoteTag = if (remote) " ↩" else ""
+        zui.tvSub.text = if (on) "${zone.level}% · A${zone.area} Ch${zone.channel}$remoteTag"
+                         else    "Off · A${zone.area} Ch${zone.channel}"
         zui.tvSub.setTextColor(if (remote) C_BLUE else if (on) C_ACCENT else C_MUTED)
     }
 
+    // ------------------------------------------------------------------
+    // ACTIONS
+    // ------------------------------------------------------------------
     private fun allOn() {
         zones.forEach { z ->
-            if (z.level == 0) z.level = 80; z.isOn = true
+            if (z.level == 0) z.level = 80
+            z.isOn = true
             zoneUIs[z.id]?.let { refreshZone(z, it) }
             client.turnOn(z.area, z.channel, z.level)
         }
-        addLog("APP", "Encendido general")
+        addLog("APP", "All zones ON")
     }
 
     private fun allOff() {
@@ -275,42 +299,47 @@ class MainActivity : AppCompatActivity() {
             zoneUIs[z.id]?.let { refreshZone(z, it) }
             client.turnOff(z.area, z.channel)
         }
-        addLog("APP", "Apagado general")
+        addLog("APP", "All zones OFF")
     }
 
     private fun syncLevels() {
-        addLog("SYN", "Solicitando niveles...")
+        addLog("SYN", "Requesting current levels...")
         zones.map { it.area }.distinct().forEach { client.requestLevels(it) }
     }
 
     private fun applyScene(name: String) {
         val levels = scenes[name] ?: return
         zones.forEachIndexed { i, z ->
-            z.level = levels.getOrElse(i) { 0 }; z.isOn = z.level > 0
+            z.level = levels.getOrElse(i) { 0 }
+            z.isOn  = z.level > 0
             zoneUIs[z.id]?.let { refreshZone(z, it) }
             client.setLevel(z.area, z.channel, z.level, 1500)
         }
-        addLog("APP", "Escena '$name'")
+        addLog("APP", "Scene '$name' applied")
     }
 
+    // ------------------------------------------------------------------
+    // CLIENT CALLBACKS
+    // ------------------------------------------------------------------
     private fun setupClient() {
         client.onStateChange = { state, msg ->
             uiScope.launch {
                 addLog(if (state == DynaliteClient.State.CONNECTED) "CON" else "---", msg)
                 when (state) {
                     DynaliteClient.State.CONNECTED -> {
-                        btnConnect.text = "✓ ${savedIp}"
+                        btnConnect.text = "✓ $savedIp"
                         btnConnect.setTextColor(C_GREEN)
                         btnConnect.setBackgroundColor(Color.parseColor("#0a200f"))
-                        delay(500); syncLevels()
+                        delay(500)
+                        syncLevels()
                     }
                     DynaliteClient.State.CONNECTING -> {
-                        btnConnect.text = "Conectando..."
+                        btnConnect.text = "Connecting..."
                         btnConnect.setTextColor(C_ACCENT)
                         btnConnect.setBackgroundColor(Color.parseColor("#1a1800"))
                     }
                     DynaliteClient.State.DISCONNECTED -> {
-                        btnConnect.text = "Reconectar"
+                        btnConnect.text = "Reconnect"
                         btnConnect.setTextColor(C_TEXT)
                         btnConnect.setBackgroundColor(Color.parseColor("#222233"))
                     }
@@ -318,75 +347,95 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Incoming level event from PDEG (remote control or keypad)
         client.onLevelEvent = { event ->
             uiScope.launch {
                 val zone = zones.find { it.area == event.area && it.channel == event.channel }
                 if (zone != null) {
-                    val wasOn = zone.isOn
-                    zone.level = event.level; zone.isOn = event.level > 0
+                    val wasOn  = zone.isOn
+                    zone.level = event.levelPct
+                    zone.isOn  = event.levelPct > 0
                     zoneUIs[zone.id]?.let { refreshZone(zone, it, remote = true) }
                     val action = when {
-                        !wasOn && zone.isOn -> "ON ${event.level}% (remoto)"
-                        wasOn && !zone.isOn -> "OFF (remoto)"
-                        else               -> "${event.level}% (remoto)"
+                        !wasOn && zone.isOn -> "turned ON at ${event.levelPct}%"
+                        wasOn && !zone.isOn -> "turned OFF"
+                        else               -> "level → ${event.levelPct}%"
                     }
-                    addLog("REM", "${zone.name} → $action")
+                    addLog("REM", "${zone.name} $action")
                 } else {
-                    addLog("RX ", "A${event.area} Ch${event.channel} → ${event.level}%")
+                    addLog("RX ", "A${event.area} Ch${event.channel} → ${event.levelPct}%")
                 }
             }
         }
 
-        client.onRawRx = { hex ->
-            uiScope.launch { addLog("PKT", hex) }
+        client.onLog = { msg ->
+            uiScope.launch { addLog("PKT", msg) }
         }
     }
 
+    // ------------------------------------------------------------------
+    // ACTIVITY LOG
+    // ------------------------------------------------------------------
     private fun addLog(tag: String, msg: String) {
         val time = timeFmt.format(Date())
         logLines.add(0, "[$time] $tag  $msg")
-        if (logLines.size > 50) logLines.removeAt(logLines.size - 1)
-        tvLog.text = logLines.take(3).joinToString("\n")
+        if (logLines.size > 100) logLines.removeAt(logLines.size - 1)
+        tvLog.text = logLines.take(4).joinToString("\n")
     }
 
+    // ------------------------------------------------------------------
+    // CONNECT DIALOG
+    // ------------------------------------------------------------------
     private fun showConnectDialog() {
         val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(16), dp(20), dp(8))
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(16), dp(20), dp(8))
         }
-        val etIp = EditText(this).apply { hint = "IP del PDEG"; setText(savedIp); inputType = InputType.TYPE_CLASS_TEXT }
-        val etPort = EditText(this).apply { hint = "Puerto"; setText(savedPort.toString()); inputType = InputType.TYPE_CLASS_NUMBER }
-        layout.addView(tv("Dirección IP del PDEG", 12f, C_MUTED))
+        val etIp = EditText(this).apply {
+            hint = "PDEG IP Address"; setText(savedIp)
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        val etPort = EditText(this).apply {
+            hint = "Port"; setText(savedPort.toString())
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        layout.addView(tv("PDEG IP Address", 12f, C_MUTED))
         layout.addView(etIp)
-        layout.addView(tv("Puerto TCP", 12f, C_MUTED).apply { setPadding(0, dp(10), 0, 0) })
+        layout.addView(tv("TCP Port", 12f, C_MUTED).apply { setPadding(0, dp(10), 0, 0) })
         layout.addView(etPort)
+
         AlertDialog.Builder(this)
-            .setTitle("Configuración PDEG")
+            .setTitle("Gateway Settings")
             .setView(layout)
-            .setPositiveButton("Conectar") { _, _ ->
-                savedIp = etIp.text.toString().trim()
+            .setPositiveButton("Connect") { _, _ ->
+                savedIp   = etIp.text.toString().trim()
                 savedPort = etPort.text.toString().toIntOrNull() ?: 50000
                 client.connect(savedIp, savedPort)
             }
-            .setNegativeButton("Cancelar", null).show()
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
+    // ------------------------------------------------------------------
+    // LAYOUT HELPERS
+    // ------------------------------------------------------------------
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-    private val wrap  = LinearLayout.LayoutParams.WRAP_CONTENT
-    private val match = LinearLayout.LayoutParams.MATCH_PARENT
-    private fun lp(w: Int, h: Int) = LinearLayout.LayoutParams(w, h)
-    private fun ll(vertical: Boolean, bg: Int = Color.TRANSPARENT, pad: Int = 0) =
-        LinearLayout(this).apply {
-            orientation = if (vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
-            setBackgroundColor(bg)
-            if (pad > 0) setPadding(dp(pad), dp(pad), dp(pad), dp(pad))
-        }
-    private fun tv(text: String, size: Float, color: Int, bold: Boolean = false) =
+    private val WRAP  = LinearLayout.LayoutParams.WRAP_CONTENT
+    private val MATCH = LinearLayout.LayoutParams.MATCH_PARENT
+    private fun LP(w: Int, h: Int) = LinearLayout.LayoutParams(w, h)
+    private fun vll(bg: Int = Color.TRANSPARENT) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL; setBackgroundColor(bg)
+    }
+    private fun hll(bg: Int = Color.TRANSPARENT) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL; setBackgroundColor(bg)
+    }
+    private fun tv(t: String, size: Float, color: Int, bold: Boolean = false) =
         TextView(this).apply {
-            this.text = text; textSize = size; setTextColor(color)
+            text = t; textSize = size; setTextColor(color)
             if (bold) setTypeface(typeface, Typeface.BOLD)
         }
     private fun divider() = android.view.View(this).apply {
         setBackgroundColor(Color.parseColor("#1a1a2a"))
-        layoutParams = lp(match, dp(1))
+        layoutParams = LP(MATCH, dp(1))
     }
 }
