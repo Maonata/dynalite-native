@@ -343,10 +343,14 @@ class MainActivity : AppCompatActivity() {
         addLog("APP", "All zones OFF")
     }
 
-    private fun syncLevels() {
-        addLog("SYN", "Requesting current levels...")
-        zones.map { it.area }.distinct().forEach { client.requestLevels(it) }
+
+private fun syncLevels() {
+    addLog("SYN", "Requesting current levels...")
+    // Pedimos nivel de cada zona concreta (2.3 Channel Level Request)
+    zones.forEach { z ->
+        client.requestLevel(z.area, z.channel)
     }
+}
 
     private fun applyScene(name: String) {
         val levels = scenes[name] ?: return
