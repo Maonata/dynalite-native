@@ -6,33 +6,42 @@ import java.net.InetSocketAddress
 import java.net.Socket
 
 /**
- * DynaliteClient — DyNet1 Protocol over TCP para Dynalite PDEG
+ * DynaliteClient — DyNet RS485 logical messages (0x1C) sobre TCP (PDEG)
  *
- * Formato DyNet1 (8 bytes):
- * [0x1C][AREA][DATA1][OPCODE][DATA2][DATA3][JOIN][CHECKSUM]
+ * Todos los mensajes son paquetes de 8 bytes:
+ * [0] SYNC (0x1C lógico)
+ * [1] Area
+ * [2] Data2 (según tipo de mensaje: canal, preset, etc.)
+ * [3] OpCode
+ * [4] Data4
+ * [5] Data5
+ * [6] Join
+ * [7] Checksum
  *
- * AREA   = área lógica (1-255)
- * DATA1  = nivel (0-255) o dato según opcode
- * OPCODE = tipo de comando
- * DATA2  = dato / fade_hi
- * DATA3  = dato / fade_lo
- * JOIN   = 0xFF = todos los canales, o (channel - 1) para uno concreto
- * CHECKSUM = XOR de bytes[1..6] con bit alto forzado (xor | 0x80)
+ * Checksum (según Integrator's Handbook):
+ *   "The DyNet Checksum is equal to the Negative 8 bit 2's complement sum of bytes 0‑6."
  *
- * Opcodes:
- * 0x71 = Set channel level with fade (TX/RX)
- * 0x61 = Report channel level (RX)
- * 0x62 = Request channel level (TX)
- * 0x79 = Recall preset (ejemplo)
+ * Referencias clave del manual:
+ *  - 2.1 Linear Channel/Area Control
+ *  - 2.3 Channel Level Request / Reply
  */
 class DynaliteClient {
 
     enum class State { DISCONNECTED, CONNECTING, CONNECTED }
 
+    /**
+     * Evento de nivel lógico por canal.
+     *
+     * @param area    Área DyNet (1..255)
+     * @param channel Canal lógico (1..255, 0 = ALL channels del área)
+     * @param levelPct Nivel en %, 0..100
+     * @param opcode  OpCode del mensaje origen (71/72/73/60/etc.)
+     * @param rawHex  Paquete completo en hex
+     */
     data class LevelEvent(
         val area: Int,
-        val channel: Int,   // 0 = ALL, 1..N = canal
-        val levelPct: Int,  // 0-100
+        val channel: Int,
+        val levelPct: Int,
         val opcode: Int,
         val rawHex: String
     )
@@ -83,7 +92,7 @@ class DynaliteClient {
     }
 
     // ------------------------------------------------------------------
-    // READ LOOP — reconstruye paquetes DyNet1 de 8 bytes
+    // READ LOOP — monta paquetes DyNet de 8 bytes
     // ------------------------------------------------------------------
     private fun readLoop(s: Socket) {
         val buf = ByteArray(1024)
@@ -95,7 +104,7 @@ class DynaliteClient {
                 if (n < 0) break
                 for (i in 0 until n) {
                     val b = buf[i].toInt().and(0xFF)
-                    // Re-sync: si estamos en posición 0, esperamos SYNC 0x1C
+                    // Re-sync: en posición 0 esperamos SYNC 0x1C
                     if (pos == 0 && b != SYNC) continue
                     packet[pos++] = b.toByte()
                     if (pos == 8) {
@@ -120,7 +129,7 @@ class DynaliteClient {
     }
 
     // ------------------------------------------------------------------
-    // PARSE INCOMING PACKET
+    // PARSE INCOMING PACKET (según handbook)
     // ------------------------------------------------------------------
     private fun processPacket(pkt: ByteArray) {
         if (pkt.size != 8) return
@@ -133,49 +142,109 @@ class DynaliteClient {
             return
         }
 
-        val area = pkt[1].toInt().and(0xFF)
-        val data1 = pkt[2].toInt().and(0xFF)
+        val area   = pkt[1].toInt().and(0xFF)
+        val b2     = pkt[2].toInt().and(0xFF)
         val opcode = pkt[3].toInt().and(0xFF)
-        val data2 = pkt[4].toInt().and(0xFF)
-        val data3 = pkt[5].toInt().and(0xFF)
-        val join = pkt[6].toInt().and(0xFF)
+        val b4     = pkt[4].toInt().and(0xFF)
+        val b5     = pkt[5].toInt().and(0xFF)
+        val join   = pkt[6].toInt().and(0xFF)
 
         log("RX $hex")
 
-        // JOIN: 0xFF = ALL, si no canal = JOIN+1
-        val channel = if (join == 0xFF) 0 else join + 1
+        // Canal lógico según 2.1 / 2.3: byte2 = channel (0-origin, FF = ALL)
+        val channel = if (b2 == 0xFF) 0 else b2 + 1
 
         when (opcode) {
-            0x71 -> {
-                // Set level: DATA1 = nivel 0-255
-                val levelPct = (data1 * 100) / 255
-                onLevelEvent?.invoke(LevelEvent(area, channel, levelPct, opcode, hex))
+            // ------------------------------------------------------------------
+            // 2.1 Linear Channel/Area Control: 0x71 / 0x72 / 0x73
+            // [1C][Area][ChannelIdx][OpCode][ChannelLevel][Fade][Join][CS]
+            // ChannelLevel: 0x01=100%, 0xFF=0%
+            // ------------------------------------------------------------------
+            0x71, 0x72, 0x73 -> {
+                val levelDyn = b4
+                val levelPct = dynLevelToPercent(levelDyn)
+                onLevelEvent?.invoke(
+                    LevelEvent(area, channel, levelPct, opcode, hex)
+                )
             }
-            0x61 -> {
-                // Report level: DATA1 = nivel 0-255
-                val levelPct = (data1 * 100) / 255
-                onLevelEvent?.invoke(LevelEvent(area, channel, levelPct, opcode, hex))
+
+            // ------------------------------------------------------------------
+            // 2.3 Channel Level Reply
+            // [1C][Area][ChannelIdx][0x60][TargetLevel][CurrentLevel][Join][CS]
+            // Levels: 0x01=100%, 0xFF=0%
+            // ------------------------------------------------------------------
+            0x60 -> {
+                val target = b4
+                val current = b5
+                val levelDyn = if (current != 0x00) current else target
+                val levelPct = dynLevelToPercent(levelDyn)
+                onLevelEvent?.invoke(
+                    LevelEvent(area, channel, levelPct, opcode, hex)
+                )
             }
+
             else -> {
-                log("RX opcode=0x${opcode.toString(16).uppercase()} area=$area join=$join d2=$data2 d3=$data3")
+                // Otros opcodes (presets, pánico, etc.) se loguean solamente
+                log("RX opcode=0x${opcode.toString(16).uppercase()} area=$area b2=$b2 join=$join")
             }
         }
     }
 
+    // Convierte nivel DyNet (0x01=100%, 0xFF=0%) a %
+    private fun dynLevelToPercent(levelDyn: Int): Int = when {
+        levelDyn <= 0x01 -> 100
+        levelDyn >= 0xFF -> 0
+        else -> ((0xFF - levelDyn) * 100) / 0xFE
+    }
+
     // ------------------------------------------------------------------
-    // COMANDOS
+    // COMANDOS (alineados con 2.1 y 2.3)
     // ------------------------------------------------------------------
 
     /**
-     * Set level para un canal o ALL (channel=0).
+     * 2.1 Linear Channel/Area Control
+     *
+     * Mensaje:
+     * [1C][Area][ChannelIdx][OpCode][ChannelLevel][Fade][Join][CS]
+     *
+     * ChannelLevel: 0x01 = 100 %, 0xFF = 0 %.
+     * ChannelIdx: 0-origin (0=canal 1, 1=canal 2, FF=ALL).
+     *
+     * @param area    Área DyNet (1..255)
+     * @param channel Canal lógico (1..255, 0 = ALL)
+     * @param level   % de 0..100
+     * @param fadeMs  tiempo de fade aproximado (100 ms resolución)
      */
     fun setLevel(area: Int, channel: Int, level: Int, fadeMs: Int = 1000) {
-        val data1 = (level.coerceIn(0, 100) * 255 / 100) // 0-255
-        val fade = (fadeMs / 20).coerceIn(0, 0xFFFF)
-        val d2 = (fade shr 8) and 0xFF
-        val d3 = fade and 0xFF
-        val join = if (channel <= 0) 0xFF else (channel - 1) and 0xFF
-        sendPacket(area, data1, 0x71, d2, d3, join)
+        val chanIndex = if (channel <= 0) 0xFF else (channel - 1) and 0xFF
+
+        val levelPct = level.coerceIn(0, 100)
+        val levelDyn = when {
+            levelPct >= 100 -> 0x01
+            levelPct <= 0   -> 0xFF
+            else -> {
+                val inv = 100 - levelPct
+                // Escala lineal sobre 0x02..0xFE
+                (0x02 + (inv * 0xFC) / 100).coerceIn(0x02, 0xFE)
+            }
+        }
+
+        // Usamos OpCode 0x71 (100 ms resolución, hasta 25.5 s)
+        val opcode = 0x71
+        val fadeSteps = (fadeMs / 100).coerceIn(1, 255)
+        val fadeByte = fadeSteps and 0xFF
+
+        val join = 0xFF // Join por defecto
+
+        val pkt = buildPacket(
+            area = area,
+            data2 = chanIndex,
+            opcode = opcode,
+            data4 = levelDyn,
+            data5 = fadeByte,
+            join = join
+        )
+        sendRaw(pkt)
     }
 
     fun turnOn(area: Int, channel: Int, level: Int = 100) =
@@ -185,27 +254,25 @@ class DynaliteClient {
         setLevel(area, channel, 0, 200)
 
     /**
-     * Ejemplo de recall de preset (puede variar según instalación).
+     * 2.3 Channel Level Request:
+     * [1C][Area][ChannelIdx][0x61][00][00][Join][CS]
      */
-    fun recallPreset(area: Int, preset: Int) {
-        val opcode = ((preset - 1) % 4) and 0xFF
-        val data3 = ((preset - 1) / 4) and 0xFF
-        sendPacket(area, 0, opcode, 0, data3, 0xFF)
-    }
-
-    /**
-     * Request current levels: envía peticiones por JOIN 0..7
-     */
-    fun requestLevels(area: Int) {
-        for (ch in 1..8) {
-            val join = (ch - 1) and 0xFF
-            // Uso opcode 0x62 para "request" para diferenciar de 0x61 (report)
-            sendPacket(area, 0, 0x62, 0, 0, join)
-        }
+    fun requestLevel(area: Int, channel: Int) {
+        val chanIndex = (channel - 1).coerceAtLeast(0) and 0xFF
+        val join = 0xFF
+        val pkt = buildPacket(
+            area = area,
+            data2 = chanIndex,
+            opcode = 0x61,
+            data4 = 0x00,
+            data5 = 0x00,
+            join = join
+        )
+        sendRaw(pkt)
     }
 
     // ------------------------------------------------------------------
-    // RAW PACKET SEND
+    // RAW PACKET SEND (DiagActivity y otros)
     // ------------------------------------------------------------------
     fun sendRaw(pkt: ByteArray) {
         if (pkt.size != 8) {
@@ -230,23 +297,30 @@ class DynaliteClient {
     }
 
     /**
-     * Construye paquete DyNet1 con checksum correcto.
+     * Construye un paquete DyNet lógico (0x1C) con checksum correcto.
+     *
+     * @param area  Byte1
+     * @param data2 Byte2 (canal, preset, etc.)
+     * @param opcode Byte3
+     * @param data4 Byte4
+     * @param data5 Byte5
+     * @param join  Byte6
      */
     fun buildPacket(
         area: Int,
-        data1: Int,
+        data2: Int,
         opcode: Int,
-        d2: Int,
-        d3: Int,
+        data4: Int,
+        data5: Int,
         join: Int
     ): ByteArray {
         val pkt = ByteArray(8)
         pkt[0] = SYNC.toByte()
         pkt[1] = (area and 0xFF).toByte()
-        pkt[2] = (data1 and 0xFF).toByte()
+        pkt[2] = (data2 and 0xFF).toByte()
         pkt[3] = (opcode and 0xFF).toByte()
-        pkt[4] = (d2 and 0xFF).toByte()
-        pkt[5] = (d3 and 0xFF).toByte()
+        pkt[4] = (data4 and 0xFF).toByte()
+        pkt[5] = (data5 and 0xFF).toByte()
         pkt[6] = (join and 0xFF).toByte()
         pkt[7] = checksum(pkt)
         return pkt
@@ -255,28 +329,16 @@ class DynaliteClient {
     // ------------------------------------------------------------------
     // HELPERS INTERNOS
     // ------------------------------------------------------------------
-    private fun sendPacket(
-        area: Int,
-        data1: Int,
-        opcode: Int,
-        d2: Int,
-        d3: Int,
-        join: Int
-    ) {
-        val pkt = buildPacket(area, data1, opcode, d2, d3, join)
-        sendRaw(pkt)
-    }
-
     private fun checksum(pkt: ByteArray): Byte {
-    // Suma bytes 0..6 (inclusive)
-    var sum = 0
-    for (i in 0..6) {
-        sum = (sum + pkt[i].toInt().and(0xFF)) and 0xFF
+        // Suma de bytes 0..6
+        var sum = 0
+        for (i in 0..6) {
+            sum = (sum + pkt[i].toInt().and(0xFF)) and 0xFF
+        }
+        // Negativo 8 bits (2's complement)
+        val cs = (-sum) and 0xFF
+        return cs.toByte()
     }
-    // Negativo en complemento a 2 (8 bits)
-    val cs = (-sum) and 0xFF
-    return cs.toByte()
-}
 
     private fun verifyChecksum(pkt: ByteArray): Boolean =
         pkt.size == 8 && pkt[7] == checksum(pkt)
