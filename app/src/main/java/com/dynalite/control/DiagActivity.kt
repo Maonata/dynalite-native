@@ -11,10 +11,12 @@ import java.util.*
 
 /**
  * DiagActivity — TCP Diagnostic Tool
- * Muestra bytes TX/RX para verificar DyNet1.
+ * Muestra bytes TX/RX para verificar protocolo DyNet (logical 0x1C).
  *
- * Paquete DyNet1:
- * [1C][AREA][DATA1][OPCODE][D2][D3][JOIN][CS]
+ * 2.1 Linear Channel/Area Control:
+ * [1C][AREA][CHAN_IDX][OPCODE][LEVEL][FADE][JOIN][CS]
+ *   CHAN_IDX: 0-origin (0=ch1, 1=ch2, FF=ALL)
+ *   LEVEL   : 0x01=100%, 0xFF=0%
  */
 class DiagActivity : AppCompatActivity() {
 
@@ -48,12 +50,12 @@ class DiagActivity : AppCompatActivity() {
             setPadding(dp(14), dp(14), dp(14), dp(14))
 
             // Título
-            addView(tv("⚙ DyNet1 Diagnostic", 16f, C_YELLOW, bold = true).apply {
+            addView(tv("⚙ DyNet Diagnostic (Linear Channel)", 16f, C_YELLOW, bold = true).apply {
                 setPadding(0, 0, 0, dp(4))
             })
             addView(
                 tv(
-                    "Format: [1C][AREA][DATA1=LEVEL][0x71][FADE_HI][FADE_LO][JOIN=CH-1][CS]",
+                    "Format: [1C][AREA][CHAN_IDX][OPCODE][LEVEL][FADE][JOIN][CS]",
                     10f,
                     C_MUTED
                 ).apply { setPadding(0, 0, 0, dp(10)) }
@@ -133,7 +135,7 @@ class DiagActivity : AppCompatActivity() {
             addView(row2, LP(MATCH, WRAP).apply { bottomMargin = dp(8) })
 
             // Botones de nivel
-            addView(tv("— Send Level Commands —", 11f, C_MUTED).apply {
+            addView(tv("— Send Linear Channel Level —", 11f, C_MUTED).apply {
                 setPadding(0, 0, 0, dp(4))
             })
             val levelRow = hll()
@@ -160,7 +162,7 @@ class DiagActivity : AppCompatActivity() {
 
             // ALL channels
             addView(Button(this@DiagActivity).apply {
-                text = "Send to ALL channels in area (JOIN=0xFF)"
+                text = "Send to ALL channels in area (CHAN_IDX=FF)"
                 textSize = 11f
                 setTextColor(C_BLUE)
                 setBackgroundColor(Color.parseColor("#08101a"))
@@ -168,9 +170,9 @@ class DiagActivity : AppCompatActivity() {
                 setOnClickListener { sendLevelAllChannels(100) }
             })
 
-            // Request level
+            // Request level (2.3)
             addView(Button(this@DiagActivity).apply {
-                text = "Request Current Levels (opcode 0x62)"
+                text = "Request Current Level (0x61/0x60)"
                 textSize = 11f
                 setTextColor(C_BLUE)
                 setBackgroundColor(Color.parseColor("#08101a"))
@@ -187,8 +189,8 @@ class DiagActivity : AppCompatActivity() {
                 ).apply { setPadding(0, 0, 0, dp(4)) }
             )
             val etManual = EditText(this@DiagActivity).apply {
-                hint = "1C 01 FF 71 00 00 FF (area=1, level=100%, all channels)"
-                setText("1C 01 FF 71 00 00 FF")
+                hint = "1C 01 00 71 01 14 FF (Area=1, Ch1, 100%, 2.0s)"
+                setText("1C 01 00 71 01 14 FF")
                 textSize = 11f
                 setTextColor(C_TEXT)
                 setHintTextColor(C_MUTED)
@@ -251,75 +253,85 @@ class DiagActivity : AppCompatActivity() {
         setContentView(scroll)
 
         setupClient()
-        addLog("INFO", "DyNet1 format: [1C][AREA][DATA1][OPCODE][D2][D3][JOIN][CS]")
-        addLog("INFO", "JOIN=0xFF all channels, JOIN=ch-1 for specific channel")
+        addLog("INFO", "Linear channel format: [1C][AREA][CHAN_IDX][OPCODE][LEVEL][FADE][JOIN][CS]")
     }
 
     private fun getArea() = etArea.text.toString().toIntOrNull() ?: 1
     private fun getChannel() = etCh.text.toString().toIntOrNull() ?: 1
 
+    private fun toDynLevel(levelPct: Int): Int = when {
+        levelPct >= 100 -> 0x01
+        levelPct <= 0   -> 0xFF
+        else -> {
+            val inv = 100 - levelPct
+            (0x02 + (inv * 0xFC) / 100).coerceIn(0x02, 0xFE)
+        }
+    }
+
     private fun previewPacket() {
         val area = getArea()
         val ch = getChannel()
-        val level = 80
-        val data1 = level * 255 / 100
-        val join = (ch - 1).coerceAtLeast(0)
-        val pkt = client.buildPacket(area, data1, 0x71, 0, 25, join)
-        addLog("PRV", "Area=$area Ch=$ch Level=$level%: ${pkt.toHex()}")
+        val levelPct = 80
+        val chanIdx = (ch - 1).coerceAtLeast(0) and 0xFF
+        val levelDyn = toDynLevel(levelPct)
+        val fadeByte = 20 // 2 s (20 * 100ms)
+        val opcode = 0x71
+        val join = 0xFF
+
+        val pkt = client.buildPacket(area, chanIdx, opcode, levelDyn, fadeByte, join)
+        addLog("PRV", "Area=$area Ch=$ch $levelPct%: ${pkt.toHex()}")
         addLog(
             "PRV",
-            "[1C][${area.hex}][${data1.hex}][71][00][19][${join.hex}][CS]"
+            "[1C][${area.hex}][${chanIdx.hex}][${opcode.hex}][${levelDyn.hex}][${fadeByte.hex}][${join.hex}][CS]"
         )
     }
 
     private fun sendLevel(levelPct: Int) {
         val area = getArea()
         val ch = getChannel()
-        val join = (ch - 1).coerceAtLeast(0)
-        addLog("TX ", "Level $levelPct% → Area=$area Ch=$ch (JOIN=${join.hex})")
-        client.setLevel(area, ch, levelPct, 500)
+        addLog("TX ", "Level $levelPct% → Area=$area Ch=$ch")
+        client.setLevel(area, ch, levelPct, 2000)
     }
 
     private fun sendLevelAllChannels(levelPct: Int) {
         val area = getArea()
-        addLog("TX ", "Level $levelPct% → Area=$area ALL channels (JOIN=FF)")
-        client.setLevel(area, 0, levelPct, 500) // channel=0 = ALL (JOIN 0xFF)
+        addLog("TX ", "Level $levelPct% → Area=$area ALL channels")
+        client.setLevel(area, 0, levelPct, 2000)
     }
 
     private fun sendRequestLevel() {
         val area = getArea()
-        addLog("TX ", "Requesting levels → Area=$area (JOIN 0..7)")
-        client.requestLevels(area)
+        val ch = getChannel()
+        addLog("TX ", "Request level → Area=$area Ch=$ch")
+        client.requestLevel(area, ch)
     }
 
     private fun sendManual(hexStr: String) {
-    try {
-        val parts = hexStr.trim().split("\\s+".toRegex()).filter { it.isNotEmpty() }
-        if (parts.size < 7) {
-            addLog("ERR", "Need 7 bytes (checksum auto-calculated)")
-            return
+        try {
+            val parts = hexStr.trim().split("\\s+".toRegex()).filter { it.isNotEmpty() }
+            if (parts.size < 7) {
+                addLog("ERR", "Need 7 bytes (checksum auto-calculated)")
+                return
+            }
+            val pkt7 = ByteArray(8)
+            for (i in 0 until 7) {
+                pkt7[i] = parts[i].toInt(16).toByte()
+            }
+            val full = client.buildPacket(
+                area = pkt7[1].toInt().and(0xFF),
+                data2 = pkt7[2].toInt().and(0xFF),
+                opcode = pkt7[3].toInt().and(0xFF),
+                data4 = pkt7[4].toInt().and(0xFF),
+                data5 = pkt7[5].toInt().and(0xFF),
+                join = pkt7[6].toInt().and(0xFF)
+            )
+            addLog("MAN", "Sending: ${full.toHex()}")
+            client.sendRaw(full)
+        } catch (e: Exception) {
+            addLog("ERR", "Invalid hex format: ${e.message}")
         }
-        val pkt7 = ByteArray(8)
-        for (i in 0 until 7) {
-            pkt7[i] = parts[i].toInt(16).toByte()
-        }
-
-        // Usamos buildPacket para asegurar mismo checksum que DynaliteClient
-        val full = client.buildPacket(
-            area = pkt7[1].toInt().and(0xFF),
-            data1 = pkt7[2].toInt().and(0xFF),
-            opcode = pkt7[3].toInt().and(0xFF),
-            d2 = pkt7[4].toInt().and(0xFF),
-            d3 = pkt7[5].toInt().and(0xFF),
-            join = pkt7[6].toInt().and(0xFF)
-        )
-
-        addLog("MAN", "Sending: ${full.toHex()}")
-        client.sendRaw(full)
-    } catch (e: Exception) {
-        addLog("ERR", "Invalid hex format: ${e.message}")
     }
-}
+
     private fun toggleConnect() {
         if (client.isConnected()) {
             client.disconnect()
