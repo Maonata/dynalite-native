@@ -168,4 +168,179 @@ class DynaliteClient {
                 )
             }
 
-            else -> 
+            else -> {
+                log("RX opcode=0x${opcode.toString(16).uppercase()} area=$area b2=$b2 join=$join")
+            }
+        }
+    }
+
+    // Convierte nivel DyNet (0x01=100%, 0xFF=0%) a porcentaje
+    private fun dynLevelToPercent(levelDyn: Int): Int = when {
+        levelDyn <= 0x01 -> 100
+        levelDyn >= 0xFF -> 0
+        else -> ((0xFF - levelDyn) * 100) / 0xFE
+    }
+
+    // ------------------------------------------------------------------
+    // COMANDOS (alineados con 2.1 y 2.3)
+    // ------------------------------------------------------------------
+
+    /**
+     * 2.1 Linear Channel/Area Control
+     *
+     * [1C][Area][ChannelIdx][OpCode][ChannelLevel][Fade][Join][CS]
+     *
+     * ChannelLevel: 0x01 = 100 %, 0xFF = 0 %.
+     * ChannelIdx: 0-origin (0=ch1, 1=ch2, FF=ALL).
+     */
+    fun setLevel(area: Int, channel: Int, level: Int, fadeMs: Int = 1000) {
+        val chanIndex = if (channel <= 0) 0xFF else (channel - 1) and 0xFF
+
+        val levelPct = level.coerceIn(0, 100)
+        val levelDyn = when {
+            levelPct >= 100 -> 0x01
+            levelPct <= 0   -> 0xFF
+            else -> {
+                val inv = 100 - levelPct
+                (0x02 + (inv * 0xFC) / 100).coerceIn(0x02, 0xFE)
+            }
+        }
+
+        // OpCode 0x71: resolución 100 ms (min 100 ms, máx 25.5 s)
+        val opcode = 0x71
+        val fadeSteps = (fadeMs / 100).coerceIn(1, 255)
+        val fadeByte = fadeSteps and 0xFF
+        val join = 0xFF // Join por defecto
+
+        val pkt = buildPacket(
+            area = area,
+            data2 = chanIndex,
+            opcode = opcode,
+            data4 = levelDyn,
+            data5 = fadeByte,
+            join = join
+        )
+        sendRaw(pkt)
+    }
+
+    fun turnOn(area: Int, channel: Int, level: Int = 100) =
+        setLevel(area, channel, level, 500)
+
+    fun turnOff(area: Int, channel: Int) =
+        setLevel(area, channel, 0, 200)
+
+    /**
+     * 2.3 Channel Level Request:
+     * [1C][Area][ChannelIdx][0x61][00][00][Join][CS]
+     */
+    fun requestLevel(area: Int, channel: Int) {
+        val chanIndex = (channel - 1).coerceAtLeast(0) and 0xFF
+        val join = 0xFF
+        val pkt = buildPacket(
+            area = area,
+            data2 = chanIndex,
+            opcode = 0x61,
+            data4 = 0x00,
+            data5 = 0x00,
+            join = join
+        )
+        sendRaw(pkt)
+    }
+
+    // ------------------------------------------------------------------
+    // RAW PACKET SEND
+    // ------------------------------------------------------------------
+    fun sendRaw(pkt: ByteArray) {
+        if (pkt.size != 8) {
+            log("TX error: packet must be 8 bytes")
+            return
+        }
+        log("TX ${pkt.toHex()}")
+        if (state != State.CONNECTED) {
+            log("TX discarded — not connected")
+            return
+        }
+        scope.launch {
+            try {
+                socket?.getOutputStream()?.apply {
+                    write(pkt)
+                    flush()
+                }
+            } catch (e: Exception) {
+                setState(State.DISCONNECTED, "TX error: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Construye un paquete DyNet lógico (0x1C) con checksum correcto.
+     *
+     * Byte 0 = 0x1C, Byte1..6 según parámetros, Byte7 = checksum.
+     */
+    fun buildPacket(
+        area: Int,
+        data2: Int,
+        opcode: Int,
+        data4: Int,
+        data5: Int,
+        join: Int
+    ): ByteArray {
+        val pkt = ByteArray(8)
+        pkt[0] = SYNC.toByte()
+        pkt[1] = (area and 0xFF).toByte()
+        pkt[2] = (data2 and 0xFF).toByte()
+        pkt[3] = (opcode and 0xFF).toByte()
+        pkt[4] = (data4 and 0xFF).toByte()
+        pkt[5] = (data5 and 0xFF).toByte()
+        pkt[6] = (join and 0xFF).toByte()
+        pkt[7] = checksum(pkt)
+        return pkt
+    }
+
+    // ------------------------------------------------------------------
+    // HELPERS INTERNOS
+    // ------------------------------------------------------------------
+    private fun checksum(pkt: ByteArray): Byte {
+        // Suma de bytes 0..6
+        var sum = 0
+        for (i in 0..6) {
+            sum = (sum + pkt[i].toInt().and(0xFF)) and 0xFF
+        }
+        // Negativo 8 bits (2's complement)
+        val cs = (-sum) and 0xFF
+        return cs.toByte()
+    }
+
+    private fun verifyChecksum(pkt: ByteArray): Boolean =
+        pkt.size == 8 && pkt[7] == checksum(pkt)
+
+    private fun ByteArray.toHex(): String =
+        joinToString(" ") { it.toInt().and(0xFF).toString(16).uppercase().padStart(2, '0') }
+
+    private fun log(msg: String) {
+        Log.d(TAG, msg)
+        onLog?.invoke(msg)
+    }
+
+    private fun setState(s: State, msg: String) {
+        state = s
+        log(msg)
+        onStateChange?.invoke(s, msg)
+    }
+
+    fun isConnected(): Boolean = state == State.CONNECTED
+
+    fun destroy() {
+        state = State.DISCONNECTED
+        closeSocket()
+        scope.cancel()
+    }
+
+    private fun closeSocket() {
+        try {
+            socket?.close()
+        } catch (_: Exception) {
+        }
+        socket = null
+    }
+}
